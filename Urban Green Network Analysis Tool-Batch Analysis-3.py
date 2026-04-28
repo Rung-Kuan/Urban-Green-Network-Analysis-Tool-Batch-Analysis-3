@@ -2512,13 +2512,22 @@ else:
     st.subheader("一、單點手動輸入")
     st.info("請填寫單一基地資料。系統會依座標與外部資料自動補算人口密度、工廠數、生活節點與綠化單元指標。")
 
+    if "single_result_df" in st.session_state:
+        if st.button("清除目前單點分析結果"):
+            del st.session_state["single_result_df"]
+            st.rerun()
+
     single_df = build_single_site_dataframe()
 
-    if single_df is None:
+    # Streamlit 的 checkbox / radio / selectbox 互動都會觸發整頁 rerun。
+    # 因此單點分析結果需存入 session_state，地圖圖層開關才不會讓結果消失。
+    if single_df is not None:
+        st.session_state["single_result_df"] = analyze_green_network(single_df)
+
+    if "single_result_df" not in st.session_state:
         st.stop()
 
-    result_df = analyze_green_network(single_df)
-    render_full_results(result_df, mode="single")
+    render_full_results(st.session_state["single_result_df"], mode="single")
 
 st.caption(
     "提醒：本工具目前為初版規則引擎，適合做原型測試、場址排序與初步盤點。"
