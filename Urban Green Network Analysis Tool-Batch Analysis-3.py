@@ -91,13 +91,13 @@ LOOKUP_FILES = {
 NODE_COLORS: Dict[str, List[int]] = {
     "高潛力": [0, 120, 60, 190],
     "中潛力": [255, 170, 0, 180],
-    "基礎潛力": [160, 160, 160, 160],
+    "低潛力": [160, 160, 160, 160],
 }
 
 LINK_COLORS: Dict[str, List[int]] = {
     "高潛力": [0, 90, 180, 190],
     "中潛力": [255, 170, 0, 180],
-    "基礎潛力": [160, 160, 160, 160],
+    "低潛力": [160, 160, 160, 160],
 }
 
 ROLE_COLORS: Dict[str, List[int]] = {
@@ -262,7 +262,7 @@ def classify_level(score: float, high_cut: float, medium_cut: float) -> str:
         return "高潛力"
     if score >= medium_cut:
         return "中潛力"
-    return "基礎潛力"
+    return "低潛力"
 
 
 def twd97_to_wgs84(x, y, county="") -> Tuple[float, float]:
@@ -887,8 +887,8 @@ def first_role_code(roles_text: str) -> str:
 
 
 def build_priority_recommendation(row: pd.Series) -> str:
-    node_level = row.get("節點潛力", "基礎潛力")
-    link_level = row.get("串聯潛力", "基礎潛力")
+    node_level = row.get("節點潛力", "低潛力")
+    link_level = row.get("串聯潛力", "低潛力")
     roles_text = row.get("可能功能情境", "未判定")
 
     if node_level == "高潛力" and link_level == "高潛力":
@@ -899,9 +899,9 @@ def build_priority_recommendation(row: pd.Series) -> str:
         main = "串聯條件佳，建議作為綠網連接補點"
     elif node_level == "中潛力" and link_level == "中潛力":
         main = "節點與串聯條件中等，建議納入第二階段評估"
-    elif node_level == "基礎潛力" and link_level == "中潛力":
+    elif node_level == "低潛力" and link_level == "中潛力":
         main = "串聯條件尚可，建議作為局部連接或補強場址"
-    elif node_level == "中潛力" and link_level == "基礎潛力":
+    elif node_level == "中潛力" and link_level == "低潛力":
         main = "節點條件尚可，建議視管理可行性再評估"
     else:
         main = "節點與串聯條件皆低，建議暫列低優先序"
@@ -1429,12 +1429,12 @@ def build_single_score_table(row: pd.Series) -> pd.DataFrame:
         "短期推動性": "2分：可短期推動；1分：需部分協調；0分：短期難以推動",
         "開放可及性": "2分：完全開放；1分：部分開放；0分：不開放",
         "鄰近生活節點": "2分：≥4處；1分：2–3處；0分：0–1處",
-        "節點潛力總分": "高潛力：14–18；中潛力：7–13；基礎潛力：0–6",
+        "節點潛力總分": "高潛力：14–18；中潛力：7–13；低潛力：0–6",
         "最近綠化單元距離": "2分：≤100m；1分：>100–300m；0分：>300m",
         "500m內其他綠化單元數": "2分：≥4處；1分：2–3處；0分：0–1處",
         "1000m內其他綠化單元數": "2分：≥8處；1分：4–7處；0分：0–3處",
         "1000m內其他綠化單元總面積": "2分：≥10ha；1分：3–9.99ha；0分：<3ha",
-        "串聯潛力總分": "高潛力：6–8；中潛力：3–5；基礎潛力：0–2",
+        "串聯潛力總分": "高潛力：6–8；中潛力：3–5；低潛力：0–2",
     }
     out = pd.DataFrame(records)
     out["計分標準"] = out["評分項目"].map(standards).fillna("")
@@ -1841,12 +1841,12 @@ def render_batch_summary(result_df: pd.DataFrame):
     chart_col1, chart_col2, chart_col3 = st.columns(3)
     with chart_col1:
         st.write("節點潛力分布")
-        st.bar_chart(result_df["節點潛力"].value_counts().reindex(["高潛力", "中潛力", "基礎潛力"]).fillna(0))
+        st.bar_chart(result_df["節點潛力"].value_counts().reindex(["高潛力", "中潛力", "低潛力"]).fillna(0))
         st.caption("節點潛力依空品壓力、敏感受體、人口暴露、管理條件與公共服務性等 9 項指標加總判定。")
 
     with chart_col2:
         st.write("串聯潛力分布")
-        st.bar_chart(result_df["串聯潛力"].value_counts().reindex(["高潛力", "中潛力", "基礎潛力"]).fillna(0))
+        st.bar_chart(result_df["串聯潛力"].value_counts().reindex(["高潛力", "中潛力", "低潛力"]).fillna(0))
         st.caption("串聯潛力依最近綠化距離、周邊綠化單元數及周邊綠化總面積判定。")
 
     with chart_col3:
@@ -1908,14 +1908,14 @@ def render_result_table_and_filters(result_df: pd.DataFrame) -> pd.DataFrame:
     with f2:
         selected_node_levels = st.multiselect(
             "篩選節點潛力",
-            options=["高潛力", "中潛力", "基礎潛力"],
-            default=["高潛力", "中潛力", "基礎潛力"],
+            options=["高潛力", "中潛力", "低潛力"],
+            default=["高潛力", "中潛力", "低潛力"],
         )
     with f3:
         selected_link_levels = st.multiselect(
             "篩選串聯潛力",
-            options=["高潛力", "中潛力", "基礎潛力"],
-            default=["高潛力", "中潛力", "基礎潛力"],
+            options=["高潛力", "中潛力", "低潛力"],
+            default=["高潛力", "中潛力", "低潛力"],
         )
 
     filtered_df = result_df[
