@@ -467,6 +467,14 @@ def compute_green_metrics(row: pd.Series, green_units: pd.DataFrame) -> Dict[str
         return result
 
     distances = euclidean_distances_m(float(x), float(y), candidates)
+
+    # 距離 1 公尺以內視為同一基地，不列入其他綠化單元計算。
+    candidates = candidates[distances > 1].copy()
+    distances = distances[distances > 1]
+
+    if candidates.empty:
+        return result
+
     within_500 = distances <= 500
     within_1000 = distances <= 1000
 
@@ -1048,7 +1056,7 @@ def make_blank_template_excel():
             {"欄位名稱": "TWD97Y", "填寫說明": "TWD97 Y 座標，單點模式要求 7 碼數字。", "建議填寫值或選項": "例如：2650000"},
             {"欄位名稱": "距主要道路距離(公尺)", "填寫說明": "目前保留人工填寫，用於空品壓力與道路線源情境判斷。", "建議填寫值或選項": "數值；若未知可先填 999"},
             {"欄位名稱": "土地權屬", "填寫說明": "用於判斷土地權屬單純度。", "建議填寫值或選項": "公有或單一權屬／公私混合或需協調／私有或權屬複雜／其他／待確認"},
-            {"欄位名稱": "管理機關", "填寫說明": "用於判斷管理權責明確性。", "建議填寫值或選項": "環境部／縣市環保局／鄉鎮市區公所／學校／醫療院所／其他機關／待確認"},
+            {"欄位名稱": "管理機關", "填寫說明": "用於判斷管理權責明確性。", "建議填寫值或選項": "管理機關明確／需確認或協調／無明確管理單位"},
             {"欄位名稱": "基地面積(公頃)", "填寫說明": "用於可植栽空間評分；若無面積但有長度，系統會用長度估算。", "建議填寫值或選項": "數值，例如 0.8"},
             {"欄位名稱": "基地長度(公里)", "填寫說明": "基地面積缺漏時，以長度 × 0.1 估算面積。", "建議填寫值或選項": "數值，例如 1.2"},
             {"欄位名稱": "短期推動性", "填寫說明": "用於判斷近期是否容易推動。", "建議填寫值或選項": "可短期推動／需部分協調／短期難以推動／待評估"},
@@ -1099,7 +1107,8 @@ def nearby_factories(row: pd.Series, radius: float = 500) -> pd.DataFrame:
 
     data = factories.copy()
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
-    data = data[data["距離(公尺)"] <= radius].copy()
+    # 距離 1 公尺以內視為同一基地，不列入周邊綠化單元清單。
+    data = data[(data["距離(公尺)"] > 1) & (data["距離(公尺)"] <= radius)].copy()
     if data.empty:
         return data
 
@@ -1117,7 +1126,8 @@ def nearby_life_nodes(row: pd.Series, radius: float = 500) -> pd.DataFrame:
 
     data = nodes.copy()
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
-    data = data[data["距離(公尺)"] <= radius].copy()
+    # 距離 1 公尺以內視為同一基地，不列入周邊綠化單元清單。
+    data = data[(data["距離(公尺)"] > 1) & (data["距離(公尺)"] <= radius)].copy()
     if data.empty:
         return data
 
@@ -1148,7 +1158,8 @@ def nearby_green_units(row: pd.Series, radius: float = 1000) -> pd.DataFrame:
         return data
 
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
-    data = data[data["距離(公尺)"] <= radius].copy()
+    # 距離 1 公尺以內視為同一基地，不列入周邊綠化單元清單。
+    data = data[(data["距離(公尺)"] > 1) & (data["距離(公尺)"] <= radius)].copy()
     if data.empty:
         return data
 
@@ -1491,7 +1502,18 @@ def render_single_summary(result_df: pd.DataFrame):
     st.dataframe(headline, hide_index=True, use_container_width=True)
 
     st.markdown("#### 評分明細")
-    st.dataframe(build_single_score_table(row), hide_index=True, use_container_width=True)
+    score_table = build_single_score_table(row)
+
+    def highlight_total_rows(r):
+        if "總分" in str(r["評分項目"]):
+            return ["background-color: #E8F6EF; font-weight: bold"] * len(r)
+        return [""] * len(r)
+
+    st.dataframe(
+        score_table.style.apply(highlight_total_rows, axis=1),
+        hide_index=True,
+        use_container_width=True,
+    )
 
     render_nearby_object_tables(row)
 
@@ -1625,36 +1647,49 @@ def build_single_site_dataframe() -> pd.DataFrame | None:
     town_lookup = load_town_lookup()
     has_town_lookup = not town_lookup.empty
 
-    with st.form("single_site_form"):
-        st.subheader("單點基地資料輸入")
+    st.subheader("單點基地資料輸入")
 
-        st.markdown("#### 1. 基本資料")
-        c1, c2, c3 = st.columns(3)
+    # 縣市與鄉鎮市區放在 form 外，才能在選擇縣市後即時更新鄉鎮市區清單。
+    st.markdown("#### 1. 基本資料")
+    location_col1, location_col2 = st.columns(2)
+
+    with location_col1:
+        if has_town_lookup:
+            town_lookup_display = town_lookup.copy()
+            town_lookup_display["縣市"] = town_lookup_display["縣市"].astype(str).str.strip()
+            town_lookup_display["鄉鎮市區"] = town_lookup_display["鄉鎮市區"].astype(str).str.strip()
+
+            county_options = sorted(town_lookup_display["縣市"].dropna().unique())
+            county = st.selectbox("縣市", county_options, key="single_county")
+
+            town_options = sorted(
+                town_lookup_display.loc[
+                    town_lookup_display["縣市"] == str(county).strip(),
+                    "鄉鎮市區",
+                ]
+                .dropna()
+                .unique()
+            )
+
+            if not town_options:
+                town_options = [""]
+
+            town = st.selectbox("鄉鎮市區", town_options, key="single_town")
+        else:
+            county = st.text_input("縣市", value="", key="single_county_manual")
+            town = st.text_input("鄉鎮市區", value="", key="single_town_manual")
+
+    with location_col2:
+        st.caption("縣市與鄉鎮市區會依 `town_lookup.csv` 連動；若清單不完整，請確認對照表內容是否包含該縣市與行政區。")
+
+    with st.form("single_site_form"):
+        c1, c2 = st.columns(2)
 
         with c1:
             site_code = st.text_input("代碼", value="SITE-001")
             site_name = st.text_input("基地名稱", value="")
 
         with c2:
-            if has_town_lookup:
-                town_lookup_display = town_lookup.copy()
-                town_lookup_display["縣市"] = town_lookup_display["縣市"].astype(str).str.strip()
-                town_lookup_display["鄉鎮市區"] = town_lookup_display["鄉鎮市區"].astype(str).str.strip()
-
-                county_options = sorted(town_lookup_display["縣市"].dropna().unique())
-                county = st.selectbox("縣市", county_options)
-
-                town_options = sorted(
-                    town_lookup_display.loc[town_lookup_display["縣市"] == str(county).strip(), "鄉鎮市區"]
-                    .dropna()
-                    .unique()
-                )
-                town = st.selectbox("鄉鎮市區", town_options)
-            else:
-                county = st.text_input("縣市", value="")
-                town = st.text_input("鄉鎮市區", value="")
-
-        with c3:
             twd97x_text = st.text_input("TWD97X（請輸入6碼數字）", value="", max_chars=6)
             twd97y_text = st.text_input("TWD97Y（請輸入7碼數字）", value="", max_chars=7)
 
@@ -1662,18 +1697,18 @@ def build_single_site_dataframe() -> pd.DataFrame | None:
         n1, n2, n3 = st.columns(3)
 
         with n1:
-            road_distance = st.number_input("距主要道路距離(公尺)", min_value=0.0, value=999.0, step=10.0)
+            road_distance_text = st.text_input("距主要道路距離(公尺)", value="999")
             land_ownership = st.selectbox("土地權屬", ["公有或單一權屬", "公私混合或需協調", "私有或權屬複雜", "其他／待確認"])
 
         with n2:
             management_agency = st.selectbox(
                 "管理機關",
-                ["環境部", "縣市環保局", "鄉鎮市區公所", "學校", "醫療院所", "其他機關", "待確認"],
+                ["管理機關明確", "需確認或協調", "無明確管理單位"],
             )
-            area = st.number_input("基地面積(公頃)", min_value=0.0, value=0.0, step=0.1)
+            area_text = st.text_input("基地面積(公頃)", value="")
 
         with n3:
-            length = st.number_input("基地長度(公里)", min_value=0.0, value=0.0, step=0.1)
+            length_text = st.text_input("基地長度(公里)", value="")
             short_term = st.selectbox("短期推動性", ["可短期推動", "需部分協調", "短期難以推動", "待評估"])
             openness = st.selectbox("開放可及性", ["完全開放", "部分開放", "不開放", "待確認"])
 
@@ -1707,6 +1742,30 @@ def build_single_site_dataframe() -> pd.DataFrame | None:
         st.error("TWD97Y 必須為 7 碼數字。")
         return None
 
+    def parse_nonnegative_number(text: str, label: str, required: bool = False):
+        text = str(text).strip()
+        if text == "":
+            if required:
+                st.error(f"{label} 必須填寫。")
+                return None
+            return np.nan
+        try:
+            value = float(text.replace(",", ""))
+        except ValueError:
+            st.error(f"{label} 必須為數字。")
+            return None
+        if value < 0:
+            st.error(f"{label} 不可為負數。")
+            return None
+        return value
+
+    road_distance_value = parse_nonnegative_number(road_distance_text, "距主要道路距離(公尺)", required=True)
+    area_value = parse_nonnegative_number(area_text, "基地面積(公頃)", required=False)
+    length_value = parse_nonnegative_number(length_text, "基地長度(公里)", required=False)
+
+    if road_distance_value is None or area_value is None or length_value is None:
+        return None
+
     row = {
         "代碼": site_code,
         "縣市": county,
@@ -1714,11 +1773,11 @@ def build_single_site_dataframe() -> pd.DataFrame | None:
         "基地名稱": site_name,
         "TWD97X": int(twd97x_text),
         "TWD97Y": int(twd97y_text),
-        "距主要道路距離(公尺)": road_distance,
+        "距主要道路距離(公尺)": road_distance_value,
         "土地權屬": land_ownership,
         "管理機關": management_agency,
-        "基地面積(公頃)": area if area > 0 else np.nan,
-        "基地長度(公里)": length if length > 0 else np.nan,
+        "基地面積(公頃)": area_value if not pd.isna(area_value) and area_value > 0 else np.nan,
+        "基地長度(公里)": length_value if not pd.isna(length_value) and length_value > 0 else np.nan,
         "短期推動性": short_term,
         "開放可及性": openness,
         "基地內部是否有停留活動空間": q1,
@@ -1732,6 +1791,8 @@ def build_single_site_dataframe() -> pd.DataFrame | None:
     }
 
     return pd.DataFrame([row])
+
+
 # ============================================================
 # 十、Streamlit 主介面
 # ============================================================
@@ -1810,6 +1871,19 @@ with st.sidebar:
             短期事件指基地或周邊短時間、階段性或臨時性的污染或暴露情境，  
             例如施工、整地、土方、臨時堆置、臨時活動或短期作業。  
             這類情境通常應優先檢討源頭管理與作業管理，植生多作為補強措施。
+            """
+        )
+    with st.expander("優先推動建議"):
+        st.markdown(
+            """
+            系統會整合節點潛力、串聯潛力與功能情境，產出推動建議。主要類別如下：  
+            - **建議優先推動**：節點與串聯條件皆佳。  
+            - **建議優先強化基地功能**：節點條件佳，但串聯條件尚未達高潛力。  
+            - **建議作為綠網連接補點**：串聯條件佳，可支撐綠網連接。  
+            - **建議納入第二階段評估**：節點與串聯條件中等。  
+            - **建議作為局部連接或補強場址**：串聯條件尚可，但節點條件較基礎。  
+            - **建議視管理可行性再評估**：節點條件尚可，但串聯條件較基礎。  
+            - **建議暫列低優先序**：節點與串聯條件皆低。  
             """
         )
 
