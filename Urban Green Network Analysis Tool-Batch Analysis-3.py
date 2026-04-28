@@ -308,32 +308,67 @@ def euclidean_distances_m(x: float, y: float, points: pd.DataFrame) -> pd.Series
     return np.sqrt((points["TWD97X"] - x) ** 2 + (points["TWD97Y"] - y) ** 2)
 
 
-def read_optional_csv(filename: str, required_cols: List[str]) -> pd.DataFrame:
-    """讀取外部對照 CSV。
+def _text_quality_score(df: pd.DataFrame) -> int:
+    """評估 CSV 讀出的中文是否正常。
 
-    外部資料來源可能有 UTF-8、Big5、CP950、BOM 或少數壞字元。
-    這裡用多組編碼依序嘗試；若仍失敗，最後以 replacement 方式讀取，
-    避免因單一外部資料檔編碼問題造成整個 App 中斷。
+    分數越高，代表欄位名稱或資料內容中可辨識中文越多；
+    若出現常見亂碼字元，則扣分。
+    """
+    if df.empty:
+        return 0
+
+    sample_cols = " ".join([str(c) for c in df.columns])
+    sample_values = ""
+
+    text_cols = df.select_dtypes(include=["object"]).columns[:8]
+    if len(text_cols) > 0:
+        sample_values = " ".join(
+            df[text_cols].head(20).astype(str).fillna("").to_numpy().ravel().tolist()
+        )
+
+    sample = sample_cols + " " + sample_values
+
+    cjk_count = sum(1 for ch in sample if "\u4e00" <= ch <= "\u9fff")
+    mojibake_count = sum(sample.count(ch) for ch in ["�", "Ã", "Â", "¤", "¥", "¦", "§", "¨", "©", "ª", "«", "¬"])
+    key_bonus = 0
+    for key in ["工廠名稱", "縣市", "鄉鎮", "地址", "學校", "醫療", "綠化"]:
+        if key in sample:
+            key_bonus += 50
+
+    return cjk_count + key_bonus - mojibake_count * 10
+
+
+def read_optional_csv(filename: str, required_cols: List[str]) -> pd.DataFrame:
+    """讀取外部對照 CSV，並盡量避免中文亂碼。
+
+    不直接採用第一個可讀成功的編碼，而是比較多種編碼讀出的中文品質；
+    避免 Big5/CP950 檔被 latin1 或其他編碼誤讀後產生亂碼。
     """
     if not Path(filename).exists():
         return pd.DataFrame(columns=required_cols)
 
-    encodings = ["utf-8-sig", "utf-8", "cp950", "big5", "latin1"]
-    last_error = None
+    encodings = ["utf-8-sig", "utf-8", "cp950", "big5", "big5hkscs"]
+    candidates = []
 
     for enc in encodings:
         try:
             df = pd.read_csv(filename, encoding=enc, low_memory=False)
             df = normalize_columns(df)
-            for col in required_cols:
-                if col not in df.columns:
-                    df[col] = np.nan
-            return df
-        except Exception as e:
-            last_error = e
+            candidates.append((_text_quality_score(df), enc, df))
+        except Exception:
+            continue
+
+    if candidates:
+        # 選中文品質分數最高的版本
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        df = candidates[0][2]
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = np.nan
+        return df
 
     try:
-        # 最後保底：用 Python engine 與 errors='replace' 避免壞字元中斷。
+        # 最後保底：用 replacement 方式讀取，但不優先使用，避免正常中文變亂碼。
         with open(filename, "r", encoding="utf-8", errors="replace") as f:
             df = pd.read_csv(f, engine="python", on_bad_lines="skip")
         df = normalize_columns(df)
@@ -342,7 +377,6 @@ def read_optional_csv(filename: str, required_cols: List[str]) -> pd.DataFrame:
                 df[col] = np.nan
         return df
     except Exception:
-        # 若真的完全無法讀取，回傳空表，並讓系統顯示自動補值提醒。
         return pd.DataFrame(columns=required_cols)
 
 
