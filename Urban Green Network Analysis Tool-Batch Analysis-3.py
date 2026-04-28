@@ -338,6 +338,44 @@ def _text_quality_score(df: pd.DataFrame) -> int:
     return cjk_count + key_bonus - mojibake_count * 10
 
 
+def repair_mojibake_text(value):
+    """修復 Big5/CP950 中文被誤讀成 latin1 後的亂碼。
+
+    例如「©M¦¨¤ì¤uÃÀªÀ」可還原為「和成木工藝社」。
+    """
+    if pd.isna(value):
+        return value
+
+    text = str(value).strip()
+    if text == "":
+        return text
+
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in text)
+    mojibake_marks = ["¤", "¦", "ª", "º", "©", "¥", "¼", "½", "¾", "¿", "À", "Á", "Ã", "»", "¬", "±", "¸"]
+
+    # 已經有正常中文且沒有明顯亂碼時，不處理。
+    if has_cjk and not any(mark in text for mark in mojibake_marks):
+        return text
+
+    # 只有疑似亂碼時，嘗試將 latin1 字串還原成 Big5/CP950。
+    if any(mark in text for mark in mojibake_marks):
+        for enc in ["cp950", "big5hkscs", "big5"]:
+            try:
+                repaired = text.encode("latin1").decode(enc)
+                repaired_has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in repaired)
+                if repaired_has_cjk:
+                    return repaired.strip()
+            except Exception:
+                pass
+
+    return text
+
+
+def repair_mojibake_series(series: pd.Series) -> pd.Series:
+    return series.apply(repair_mojibake_text)
+
+
+
 def read_optional_csv(filename: str, required_cols: List[str]) -> pd.DataFrame:
     """讀取外部對照 CSV，並盡量避免中文亂碼。
 
@@ -396,13 +434,17 @@ def load_town_lookup() -> pd.DataFrame:
 def load_factory_points() -> pd.DataFrame:
     df = read_optional_csv("factory_points.csv", ["TWD97X", "TWD97Y"])
     if not df.empty:
+        # 先修復可能的 Big5/CP950 亂碼欄位內容。
+        for col in df.select_dtypes(include=["object"]).columns:
+            df[col] = repair_mojibake_series(df[col])
+
         df["TWD97X"] = df["TWD97X"].apply(clean_numeric)
         df["TWD97Y"] = df["TWD97Y"].apply(clean_numeric)
         df = df.dropna(subset=["TWD97X", "TWD97Y"])
 
         name_col = find_factory_name_column(df)
         if name_col is not None:
-            df["標準工廠名稱"] = df[name_col].fillna("").astype(str).str.strip()
+            df["標準工廠名稱"] = repair_mojibake_series(df[name_col].fillna("").astype(str).str.strip())
             df["標準工廠名稱"] = df["標準工廠名稱"].replace("", np.nan)
         else:
             df["標準工廠名稱"] = np.nan
@@ -410,7 +452,7 @@ def load_factory_points() -> pd.DataFrame:
         # 若沒有名稱，至少用管制編號或 emsno 輔助顯示，不再全部顯示未命名。
         for fallback_col in ["管制編號", "emsno", "facno", "uniformno"]:
             if fallback_col in df.columns:
-                fallback = df[fallback_col].fillna("").astype(str).str.strip().replace("", np.nan)
+                fallback = repair_mojibake_series(df[fallback_col].fillna("").astype(str).str.strip()).replace("", np.nan)
                 df["標準工廠名稱"] = df["標準工廠名稱"].fillna(fallback)
 
         df["標準工廠名稱"] = df["標準工廠名稱"].fillna("未命名工廠")
@@ -1581,11 +1623,11 @@ def render_single_context_map(row: pd.Series):
     if not factories_map.empty:
         # 不共用泛用「名稱」欄位，改用地圖專用 tooltip_name，避免被預設值覆蓋。
         if "標準工廠名稱" in factories_map.columns:
-            factories_map["tooltip_name"] = factories_map["標準工廠名稱"].fillna("").astype(str).str.strip()
+            factories_map["tooltip_name"] = repair_mojibake_series(factories_map["標準工廠名稱"].fillna("").astype(str).str.strip())
         elif "工廠名稱" in factories_map.columns:
-            factories_map["tooltip_name"] = factories_map["工廠名稱"].fillna("").astype(str).str.strip()
+            factories_map["tooltip_name"] = repair_mojibake_series(factories_map["工廠名稱"].fillna("").astype(str).str.strip())
         elif "名稱" in factories_map.columns:
-            factories_map["tooltip_name"] = factories_map["名稱"].fillna("").astype(str).str.strip()
+            factories_map["tooltip_name"] = repair_mojibake_series(factories_map["名稱"].fillna("").astype(str).str.strip())
         else:
             factories_map["tooltip_name"] = ""
 
@@ -2169,6 +2211,11 @@ with st.sidebar:
             - **醫療院所**：112年12月醫療院所分布圖  
             """
         )
+
+    st.divider()
+    if st.button("重新讀取外部資料"):
+        st.cache_data.clear()
+        st.success("已清除快取，請重新執行分析。")
 
     st.divider()
     st.header("計分與名詞說明")
