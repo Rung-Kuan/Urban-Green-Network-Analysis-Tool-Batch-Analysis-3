@@ -1072,12 +1072,12 @@ def make_excel_download(df: pd.DataFrame):
                     "醫療院所",
                 ],
                 "資料來源": [
-                    "114年人口密度資料，1150427下載",
-                    "環境保護許可管理系統(暨解除列管)對象基本資料-曾有空列管，1150427下載",
-                    "空品淨化區，114年第四季季報",
-                    "綠牆，113年第四季季報，面積由平方公尺換算為公頃",
-                    "111學年度各級學校名錄",
-                    "113年12月醫療院所分布圖",
+                    "內政部－114年人口密度資料（1150427下載）",
+                    "環境部－環境保護許可管理系統（暨解除列管）對象基本資料（空污列管中，1150427下載）",
+                    "環境部－114年第四季季報",
+                    "環境部－113年第四季季報（面積由平方公尺換算為公頃）",
+                    "教育部－111學年度各級學校名錄",
+                    "內政部－113年12月醫療院所分布圖（僅保留醫院）",
                 ],
             }
         ).to_excel(writer, index=False, sheet_name="資料來源說明")
@@ -1692,7 +1692,7 @@ def render_single_context_map(row: pd.Series):
         "緯度": row["緯度"],
         "經度": row["經度"],
         "color": [0, 0, 0, 245],
-        "radius": 180,
+        "radius": 120,
     }])
 
     factories_all = all_factories_with_distance(row)
@@ -1702,17 +1702,6 @@ def render_single_context_map(row: pd.Series):
     factories_map = prepare_point_layer_df(factories_all, county)
     life_map = prepare_point_layer_df(life_all, county)
     green_map = prepare_point_layer_df(green_all, county)
-
-    st.markdown("#### 地圖圖層")
-    layer_col1, layer_col2, layer_col3, layer_col4 = st.columns(4)
-    with layer_col1:
-        show_factories = st.checkbox("工廠", value=True)
-    with layer_col2:
-        show_schools = st.checkbox("學校", value=True)
-    with layer_col3:
-        show_medical = st.checkbox("醫療院所", value=True)
-    with layer_col4:
-        show_green = st.checkbox("綠化單元", value=True)
 
     if not factories_map.empty:
         # 不共用泛用「名稱」欄位，改用地圖專用 tooltip_name，避免被預設值覆蓋。
@@ -1729,7 +1718,7 @@ def render_single_context_map(row: pd.Series):
         factories_map["名稱"] = factories_map["tooltip_name"]
         factories_map["類型"] = "工廠"
         factories_map["color"] = [[231, 76, 60, 130]] * len(factories_map)
-        factories_map["radius"] = 60
+        factories_map["radius"] = 35
 
     if not life_map.empty:
         life_map["tooltip_name"] = life_map["名稱"] if "名稱" in life_map.columns else "生活節點"
@@ -1751,7 +1740,7 @@ def render_single_context_map(row: pd.Series):
 
         life_map["是否醫療院所"] = life_map.apply(is_medical, axis=1)
         life_map["是否學校"] = life_map.apply(is_school, axis=1)
-        life_map["radius"] = 60
+        life_map["radius"] = 35
 
     school_map = pd.DataFrame()
     medical_map = pd.DataFrame()
@@ -1772,7 +1761,7 @@ def render_single_context_map(row: pd.Series):
             axis=1,
         )
         green_map["color"] = [[46, 204, 113, 130]] * len(green_map)
-        green_map["radius"] = 65
+        green_map["radius"] = 40
 
     layers = []
 
@@ -1815,7 +1804,7 @@ def render_single_context_map(row: pd.Series):
     )
 
     # 圖層順序：綠化單元 → 學校 → 醫療院所 → 工廠 → 查詢基地
-    if show_green and not green_map.empty:
+    if not green_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=green_map,
@@ -1826,7 +1815,7 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if show_schools and not school_map.empty:
+    if not school_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=school_map,
@@ -1837,7 +1826,7 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if show_medical and not medical_map.empty:
+    if not medical_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=medical_map,
@@ -1848,7 +1837,7 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if show_factories and not factories_map.empty:
+    if not factories_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=factories_map,
@@ -2356,12 +2345,12 @@ with st.sidebar:
     with st.expander("自動帶入資料來源"):
         st.markdown(
             """
-            - **人口密度**：114年人口密度資料，1150427下載  
-            - **工廠資料**：環境保護許可管理系統（暨解除列管）對象基本資料－曾有空列管，1150427下載  
-            - **空品淨化區**：114年第四季季報  
-            - **綠牆**：113年第四季季報，面積由平方公尺換算為公頃  
-            - **各級學校**：111學年度各級學校名錄  
-            - **醫療院所**：113年12月醫療院所分布圖  
+            - **人口密度**：內政部－114年人口密度資料（1150427下載）  
+            - **工廠資料**：環境部－環境保護許可管理系統（暨解除列管）對象基本資料（空污列管中，1150427下載）  
+            - **空品淨化區**：環境部－114年第四季季報  
+            - **綠牆**：環境部－113年第四季季報（面積由平方公尺換算為公頃）  
+            - **各級學校**：教育部－教育部－111學年度各級學校名錄  
+            - **醫療院所**：內政部－內政部－113年12月醫療院所分布圖（僅保留醫院）（僅保留醫院）  
             """
         )
 
