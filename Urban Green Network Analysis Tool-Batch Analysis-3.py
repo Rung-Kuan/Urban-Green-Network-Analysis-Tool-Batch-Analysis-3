@@ -465,17 +465,52 @@ def load_life_nodes() -> pd.DataFrame:
     medical = read_optional_csv("medical_facilities.csv", ["節點名稱", "TWD97X", "TWD97Y"])
 
     if not schools.empty:
-        schools["節點類型"] = schools["節點類型"] if "節點類型" in schools.columns else "學校"
+        if "節點類型" not in schools.columns:
+            schools["節點類型"] = "學校"
         schools["資料來源"] = "各級學校"
+        schools["標準節點名稱"] = schools.apply(
+            lambda r: object_name(
+                r,
+                ["節點名稱", "學校名稱", "學校名", "校名", "名稱", "name", "Name"],
+                "學校",
+            ),
+            axis=1,
+        )
+
     if not medical.empty:
-        medical["節點類型"] = medical["節點類型"] if "節點類型" in medical.columns else "醫療院所"
+        if "節點類型" not in medical.columns:
+            medical["節點類型"] = "醫療院所"
         medical["資料來源"] = "醫療院所"
+        medical["標準節點名稱"] = medical.apply(
+            lambda r: object_name(
+                r,
+                [
+                    "節點名稱",
+                    "醫療院所名稱",
+                    "機構名稱",
+                    "院所名稱",
+                    "醫事機構名稱",
+                    "醫院名稱",
+                    "診所名稱",
+                    "名稱",
+                    "name",
+                    "Name",
+                ],
+                "醫療院所",
+            ),
+            axis=1,
+        )
 
     df = pd.concat([schools, medical], ignore_index=True)
     if not df.empty:
         df["TWD97X"] = df["TWD97X"].apply(clean_numeric)
         df["TWD97Y"] = df["TWD97Y"].apply(clean_numeric)
         df = df.dropna(subset=["TWD97X", "TWD97Y"])
+        if "標準節點名稱" not in df.columns:
+            df["標準節點名稱"] = df.apply(
+                lambda r: object_name(r, ["節點名稱", "名稱", "name", "Name"], "生活節點"),
+                axis=1,
+            )
     return df
 
 
@@ -1042,7 +1077,7 @@ def make_excel_download(df: pd.DataFrame):
                     "空品淨化區，114年第四季季報",
                     "綠牆，113年第四季季報，面積由平方公尺換算為公頃",
                     "111學年度各級學校名錄",
-                    "112年12月醫療院所分布圖",
+                    "113年12月醫療院所分布圖",
                 ],
             }
         ).to_excel(writer, index=False, sheet_name="資料來源說明")
@@ -1286,10 +1321,34 @@ def nearby_life_nodes(row: pd.Series, radius: float = 500) -> pd.DataFrame:
     if data.empty:
         return data
 
-    data["名稱"] = data.apply(
-        lambda r: object_name(r, ["節點名稱", "學校名稱", "醫療院所名稱", "機構名稱", "名稱"], "生活節點"),
+    if "標準節點名稱" in data.columns:
+        data["名稱"] = data["標準節點名稱"].fillna("").astype(str).str.strip()
+        data["名稱"] = data["名稱"].replace("", np.nan)
+    else:
+        data["名稱"] = np.nan
+
+    fallback_names = data.apply(
+        lambda r: object_name(
+            r,
+            [
+                "節點名稱",
+                "學校名稱",
+                "學校名",
+                "校名",
+                "醫療院所名稱",
+                "機構名稱",
+                "院所名稱",
+                "醫事機構名稱",
+                "醫院名稱",
+                "診所名稱",
+                "名稱",
+            ],
+            "生活節點",
+        ),
         axis=1,
     )
+    data["名稱"] = data["名稱"].fillna(fallback_names).fillna("生活節點")
+
     if "節點類型" not in data.columns:
         data["節點類型"] = data.get("資料來源", "生活節點")
     return data.sort_values("距離(公尺)")
@@ -1549,10 +1608,34 @@ def all_life_nodes_with_distance(row: pd.Series) -> pd.DataFrame:
 
     data = nodes.copy()
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
-    data["名稱"] = data.apply(
-        lambda r: object_name(r, ["節點名稱", "學校名稱", "醫療院所名稱", "機構名稱", "名稱"], "生活節點"),
+    if "標準節點名稱" in data.columns:
+        data["名稱"] = data["標準節點名稱"].fillna("").astype(str).str.strip()
+        data["名稱"] = data["名稱"].replace("", np.nan)
+    else:
+        data["名稱"] = np.nan
+
+    fallback_names = data.apply(
+        lambda r: object_name(
+            r,
+            [
+                "節點名稱",
+                "學校名稱",
+                "學校名",
+                "校名",
+                "醫療院所名稱",
+                "機構名稱",
+                "院所名稱",
+                "醫事機構名稱",
+                "醫院名稱",
+                "診所名稱",
+                "名稱",
+            ],
+            "生活節點",
+        ),
         axis=1,
     )
+    data["名稱"] = data["名稱"].fillna(fallback_names).fillna("生活節點")
+
     if "節點類型" not in data.columns:
         data["節點類型"] = data.get("資料來源", "生活節點")
     return data.sort_values("距離(公尺)")
@@ -1639,11 +1722,22 @@ def render_single_context_map(row: pd.Series):
 
     if not life_map.empty:
         life_map["tooltip_name"] = life_map["名稱"] if "名稱" in life_map.columns else "生活節點"
+        life_map["tooltip_name"] = life_map["tooltip_name"].fillna("").astype(str).str.strip().replace("", "生活節點")
         life_map["類型"] = life_map.apply(
             lambda r: f"{r.get('資料來源', '生活節點')}／{r.get('節點類型', '生活節點')}",
             axis=1,
         )
-        life_map["color"] = [[52, 152, 219, 140]] * len(life_map)
+
+        def life_color(r):
+            source = str(r.get("資料來源", ""))
+            node_type = str(r.get("節點類型", ""))
+            if "醫療" in source or "醫療" in node_type or "院所" in node_type or "醫院" in node_type or "診所" in node_type:
+                return [155, 89, 182, 170]  # 紫色：醫療院所
+            if "學校" in source or "學校" in node_type or "校" in node_type:
+                return [52, 152, 219, 170]  # 藍色：學校
+            return [41, 128, 185, 150]
+
+        life_map["color"] = life_map.apply(life_color, axis=1)
         life_map["radius"] = 60
 
     if not green_map.empty:
@@ -1769,7 +1863,7 @@ def render_single_context_map(row: pd.Series):
 
     st.caption(
         "圖例：黑色＝查詢基地；藍色透明圈＝500 公尺範圍；橘色透明圈＝1000 公尺範圍；"
-        "紅色＝完整工廠資料；藍色＝完整敏感受體／生活節點資料；綠色＝完整綠化單元資料。"
+        "紅色＝完整工廠資料；藍色＝學校；紫色＝醫療院所；綠色＝完整綠化單元資料。"
     )
 
     def count_within(df: pd.DataFrame, distance: float) -> int:
@@ -2231,7 +2325,7 @@ with st.sidebar:
             - **空品淨化區**：114年第四季季報  
             - **綠牆**：113年第四季季報，面積由平方公尺換算為公頃  
             - **各級學校**：111學年度各級學校名錄  
-            - **醫療院所**：112年12月醫療院所分布圖  
+            - **醫療院所**：113年12月醫療院所分布圖  
             """
         )
 
