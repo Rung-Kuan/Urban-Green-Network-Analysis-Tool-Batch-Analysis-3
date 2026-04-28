@@ -1112,32 +1112,34 @@ def nearby_factories(row: pd.Series, radius: float = 500) -> pd.DataFrame:
     if data.empty:
         return data
 
+    # 工廠地圖與明細顯示名稱：優先直接使用 factory_points.csv 的「工廠名稱」。
     if "工廠名稱" in data.columns:
-        data["名稱"] = data["工廠名稱"].fillna("").astype(str).str.strip()
-        data["名稱"] = data["名稱"].replace("", np.nan)
+        direct_name = data["工廠名稱"].fillna("").astype(str).str.strip()
+        direct_name = direct_name.replace("", np.nan)
     else:
-        data["名稱"] = np.nan
+        direct_name = pd.Series(np.nan, index=data.index)
 
-    data["名稱"] = data["名稱"].fillna(
-        data.apply(
-            lambda r: object_name(
-                r,
-                [
-                    "工廠名稱",
-                    "公私場所名稱",
-                    "事業機構名稱",
-                    "公司名稱",
-                    "工廠廠名",
-                    "機構名稱",
-                    "事業名稱",
-                    "管制編號",
-                    "名稱",
-                ],
-                "工廠",
-            ),
-            axis=1,
-        )
+    fallback_name = data.apply(
+        lambda r: object_name(
+            r,
+            [
+                "工廠名稱",
+                "公私場所名稱",
+                "事業機構名稱",
+                "公司名稱",
+                "工廠廠名",
+                "機構名稱",
+                "事業名稱",
+                "管制編號",
+                "名稱",
+            ],
+            "未命名工廠",
+        ),
+        axis=1,
     )
+
+    data["名稱"] = direct_name.fillna(fallback_name).fillna("未命名工廠")
+    data["tooltip_name"] = data["名稱"]
     return data.sort_values("距離(公尺)")
 
 
@@ -1374,32 +1376,34 @@ def all_factories_with_distance(row: pd.Series) -> pd.DataFrame:
 
     data = factories.copy()
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
+    # 工廠地圖與明細顯示名稱：優先直接使用 factory_points.csv 的「工廠名稱」。
     if "工廠名稱" in data.columns:
-        data["名稱"] = data["工廠名稱"].fillna("").astype(str).str.strip()
-        data["名稱"] = data["名稱"].replace("", np.nan)
+        direct_name = data["工廠名稱"].fillna("").astype(str).str.strip()
+        direct_name = direct_name.replace("", np.nan)
     else:
-        data["名稱"] = np.nan
+        direct_name = pd.Series(np.nan, index=data.index)
 
-    data["名稱"] = data["名稱"].fillna(
-        data.apply(
-            lambda r: object_name(
-                r,
-                [
-                    "工廠名稱",
-                    "公私場所名稱",
-                    "事業機構名稱",
-                    "公司名稱",
-                    "工廠廠名",
-                    "機構名稱",
-                    "事業名稱",
-                    "管制編號",
-                    "名稱",
-                ],
-                "工廠",
-            ),
-            axis=1,
-        )
+    fallback_name = data.apply(
+        lambda r: object_name(
+            r,
+            [
+                "工廠名稱",
+                "公私場所名稱",
+                "事業機構名稱",
+                "公司名稱",
+                "工廠廠名",
+                "機構名稱",
+                "事業名稱",
+                "管制編號",
+                "名稱",
+            ],
+            "未命名工廠",
+        ),
+        axis=1,
     )
+
+    data["名稱"] = direct_name.fillna(fallback_name).fillna("未命名工廠")
+    data["tooltip_name"] = data["名稱"]
     return data.sort_values("距離(公尺)")
 
 
@@ -1464,6 +1468,7 @@ def render_single_context_map(row: pd.Series):
 
     base_df = pd.DataFrame([{
         "名稱": row.get("基地名稱", "輸入基地"),
+        "tooltip_name": row.get("基地名稱", "輸入基地"),
         "類型": "查詢基地",
         "距離(公尺)": 0,
         "緯度": row["緯度"],
@@ -1481,17 +1486,22 @@ def render_single_context_map(row: pd.Series):
     green_map = prepare_point_layer_df(green_all, county)
 
     if not factories_map.empty:
-        if "名稱" not in factories_map.columns or factories_map["名稱"].isna().all():
-            if "工廠名稱" in factories_map.columns:
-                factories_map["名稱"] = factories_map["工廠名稱"].fillna("").astype(str).str.strip()
-            else:
-                factories_map["名稱"] = "工廠"
-        factories_map["名稱"] = factories_map["名稱"].replace("", "工廠")
+        # 不共用泛用「名稱」欄位，改用地圖專用 tooltip_name，避免被預設值覆蓋。
+        if "工廠名稱" in factories_map.columns:
+            factories_map["tooltip_name"] = factories_map["工廠名稱"].fillna("").astype(str).str.strip()
+        elif "名稱" in factories_map.columns:
+            factories_map["tooltip_name"] = factories_map["名稱"].fillna("").astype(str).str.strip()
+        else:
+            factories_map["tooltip_name"] = ""
+
+        factories_map["tooltip_name"] = factories_map["tooltip_name"].replace("", "未命名工廠")
+        factories_map["名稱"] = factories_map["tooltip_name"]
         factories_map["類型"] = "工廠"
         factories_map["color"] = [[231, 76, 60, 130]] * len(factories_map)
         factories_map["radius"] = 60
 
     if not life_map.empty:
+        life_map["tooltip_name"] = life_map["名稱"] if "名稱" in life_map.columns else "生活節點"
         life_map["類型"] = life_map.apply(
             lambda r: f"{r.get('資料來源', '生活節點')}／{r.get('節點類型', '生活節點')}",
             axis=1,
@@ -1500,6 +1510,7 @@ def render_single_context_map(row: pd.Series):
         life_map["radius"] = 60
 
     if not green_map.empty:
+        green_map["tooltip_name"] = green_map["名稱"] if "名稱" in green_map.columns else "綠化單元"
         green_map["類型"] = green_map.apply(
             lambda r: f"綠化單元／{r.get('資料類型', '')}",
             axis=1,
@@ -1602,7 +1613,7 @@ def render_single_context_map(row: pd.Series):
 
     tooltip = {
         "html": """
-        <b>{名稱}</b><br/>
+        <b>{tooltip_name}</b><br/>
         類型：{類型}<br/>
         距離：{距離(公尺)} 公尺
         """,
@@ -2083,15 +2094,11 @@ with st.sidebar:
     with st.expander("敏感受體與生活節點"):
         st.markdown(
             """
-            **敏感受體**指較需要空氣品質防護的對象。  
-            目前本工具暫以以下資料作為敏感受體自動比對基礎：  
-            - 各級學校：`schools.csv`  
-            - 醫療院所：`medical_facilities.csv`  
+            **敏感受體**指較需要空氣品質防護的對象，例如學校、醫療院所等。  
+            這類場所通常聚集兒童、學生、病患、高齡者或其他較易受空氣污染影響的人群。  
 
             **生活節點**指基地周邊與民眾日常使用、公共服務、健康照護或活動停留相關的設施。  
-            目前本工具暫以以下資料作為生活節點自動比對基礎：  
-            - 各級學校：`schools.csv`  
-            - 醫療院所：`medical_facilities.csv`  
+            目前本工具先以學校與醫療院所作為生活節點的初步判斷基礎。  
 
             未來生活節點可再擴充納入：  
             - 公園、廣場、活動中心  
@@ -2100,8 +2107,8 @@ with st.sidebar:
             - 長照機構、托嬰中心、社福設施  
             - 其他具日常使用或公共服務功能之場所  
 
-            因此目前版本中，`500公尺內敏感受體數` 與 `500公尺內生活節點數`
-            暫時使用相同資料來源計算；未來若新增生活節點資料，可再將兩者比對邏輯分開。
+            因此目前版本中，敏感受體與生活節點暫時採相同基礎資料進行判斷；  
+            未來若新增更多生活節點資料，可再將兩者比對邏輯分開。
             """
         )
     with st.expander("綠色基礎設施／綠化單元"):
