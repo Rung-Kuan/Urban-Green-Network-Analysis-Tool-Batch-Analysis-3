@@ -1112,9 +1112,31 @@ def nearby_factories(row: pd.Series, radius: float = 500) -> pd.DataFrame:
     if data.empty:
         return data
 
-    data["名稱"] = data.apply(
-        lambda r: object_name(r, ["工廠名稱", "事業名稱", "管制編號", "名稱"], "工廠"),
-        axis=1,
+    if "工廠名稱" in data.columns:
+        data["名稱"] = data["工廠名稱"].fillna("").astype(str).str.strip()
+        data["名稱"] = data["名稱"].replace("", np.nan)
+    else:
+        data["名稱"] = np.nan
+
+    data["名稱"] = data["名稱"].fillna(
+        data.apply(
+            lambda r: object_name(
+                r,
+                [
+                    "工廠名稱",
+                    "公私場所名稱",
+                    "事業機構名稱",
+                    "公司名稱",
+                    "工廠廠名",
+                    "機構名稱",
+                    "事業名稱",
+                    "管制編號",
+                    "名稱",
+                ],
+                "工廠",
+            ),
+            axis=1,
+        )
     )
     return data.sort_values("距離(公尺)")
 
@@ -1300,8 +1322,12 @@ def render_nearby_object_tables(row: pd.Series):
         if factories.empty:
             st.info("500 公尺內未偵測到工廠，或尚未提供 factory_points.csv。")
         else:
+            display_cols = [c for c in ["名稱", "工廠名稱", "emsno", "industryname", "facilityaddress", "距離(公尺)"] if c in factories.columns]
+            # 若名稱與工廠名稱重複，只保留名稱，避免欄位太雜。
+            if "名稱" in display_cols and "工廠名稱" in display_cols:
+                display_cols.remove("工廠名稱")
             st.dataframe(
-                factories[["名稱", "距離(公尺)"]].round({"距離(公尺)": 1}),
+                factories[display_cols].round({"距離(公尺)": 1}),
                 hide_index=True,
                 use_container_width=True,
             )
@@ -1348,9 +1374,31 @@ def all_factories_with_distance(row: pd.Series) -> pd.DataFrame:
 
     data = factories.copy()
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
-    data["名稱"] = data.apply(
-        lambda r: object_name(r, ["工廠名稱", "事業名稱", "管制編號", "名稱"], "工廠"),
-        axis=1,
+    if "工廠名稱" in data.columns:
+        data["名稱"] = data["工廠名稱"].fillna("").astype(str).str.strip()
+        data["名稱"] = data["名稱"].replace("", np.nan)
+    else:
+        data["名稱"] = np.nan
+
+    data["名稱"] = data["名稱"].fillna(
+        data.apply(
+            lambda r: object_name(
+                r,
+                [
+                    "工廠名稱",
+                    "公私場所名稱",
+                    "事業機構名稱",
+                    "公司名稱",
+                    "工廠廠名",
+                    "機構名稱",
+                    "事業名稱",
+                    "管制編號",
+                    "名稱",
+                ],
+                "工廠",
+            ),
+            axis=1,
+        )
     )
     return data.sort_values("距離(公尺)")
 
@@ -1433,6 +1481,12 @@ def render_single_context_map(row: pd.Series):
     green_map = prepare_point_layer_df(green_all, county)
 
     if not factories_map.empty:
+        if "名稱" not in factories_map.columns or factories_map["名稱"].isna().all():
+            if "工廠名稱" in factories_map.columns:
+                factories_map["名稱"] = factories_map["工廠名稱"].fillna("").astype(str).str.strip()
+            else:
+                factories_map["名稱"] = "工廠"
+        factories_map["名稱"] = factories_map["名稱"].replace("", "工廠")
         factories_map["類型"] = "工廠"
         factories_map["color"] = [[231, 76, 60, 130]] * len(factories_map)
         factories_map["radius"] = 60
@@ -2026,11 +2080,28 @@ with st.sidebar:
             評估基地與周邊綠化單元形成空間連接與網絡支撐的可能性。
             """
         )
-    with st.expander("生活節點"):
+    with st.expander("敏感受體與生活節點"):
         st.markdown(
             """
-            生活節點指基地周邊與民眾日常使用、健康服務或公共活動相關的設施。  
-            目前系統以各級學校與醫療院所資料作為自動補算基礎。
+            **敏感受體**指較需要空氣品質防護的對象。  
+            目前本工具暫以以下資料作為敏感受體自動比對基礎：  
+            - 各級學校：`schools.csv`  
+            - 醫療院所：`medical_facilities.csv`  
+
+            **生活節點**指基地周邊與民眾日常使用、公共服務、健康照護或活動停留相關的設施。  
+            目前本工具暫以以下資料作為生活節點自動比對基礎：  
+            - 各級學校：`schools.csv`  
+            - 醫療院所：`medical_facilities.csv`  
+
+            未來生活節點可再擴充納入：  
+            - 公園、廣場、活動中心  
+            - 市場、商圈、車站、公車轉運站  
+            - 圖書館、行政服務據點  
+            - 長照機構、托嬰中心、社福設施  
+            - 其他具日常使用或公共服務功能之場所  
+
+            因此目前版本中，`500公尺內敏感受體數` 與 `500公尺內生活節點數`
+            暫時使用相同資料來源計算；未來若新增生活節點資料，可再將兩者比對邏輯分開。
             """
         )
     with st.expander("綠色基礎設施／綠化單元"):
