@@ -1918,10 +1918,32 @@ def render_result_table_and_filters(result_df: pd.DataFrame) -> pd.DataFrame:
             default=["高潛力", "中潛力", "低潛力"],
         )
 
+    result_df = result_df.copy()
+    result_df["推動順序分類"] = result_df["優先推動建議"].apply(classify_push_order)
+
+    push_order_options = [
+        "建議優先推動",
+        "建議優先強化基地功能",
+        "建議作為綠網連接補點",
+        "建議納入第二階段評估",
+        "建議作為局部連接或補強場址",
+        "建議視管理可行性再評估",
+        "建議暫列低優先序",
+        "其他",
+    ]
+    available_push_orders = [x for x in push_order_options if x in result_df["推動順序分類"].dropna().unique()]
+
+    selected_push_orders = st.multiselect(
+        "篩選優先推動建議",
+        options=available_push_orders,
+        default=available_push_orders,
+    )
+
     filtered_df = result_df[
         result_df["縣市"].isin(selected_cities)
         & result_df["節點潛力"].isin(selected_node_levels)
         & result_df["串聯潛力"].isin(selected_link_levels)
+        & result_df["推動順序分類"].isin(selected_push_orders)
     ].copy()
 
     main_columns = [
@@ -1945,6 +1967,7 @@ def render_result_table_and_filters(result_df: pd.DataFrame) -> pd.DataFrame:
         "可能功能情境",
         "主要對應功能",
         "植生措施適用性",
+        "推動順序分類",
         "優先推動建議",
     ]
 
@@ -2279,6 +2302,31 @@ with st.sidebar:
             - **建議作為局部連接或補強場址**：串聯條件尚可，但節點條件較基礎。  
             - **建議視管理可行性再評估**：節點條件尚可，但串聯條件較基礎。  
             - **建議暫列低優先序**：節點與串聯條件皆低。  
+            """
+        )
+
+    with st.expander("功能角色"):
+        st.markdown(
+            """
+            功能角色用來說明基地較適合扮演的空品植生淨化功能。  
+            本工具不是只判斷單一角色，而是依使用者回答的現況問題，自動列出可能同時符合的情境。
+
+            **A 類：多源逸散背景**  
+            - **A1 停留空間情境**：基地內有人停留使用，重點在改善停留空間品質。  
+            - **A2 通行路徑情境**：基地內或周邊有人通行，重點在動線、遮蔭與舒適性。  
+            - **A3 邊界防護情境**：基地與污染源或受體有明確交界，重點在邊界緩衝。  
+
+            **B 類：道路或線源影響背景**  
+            - **B1 道路旁停留受體情境**：主要道路旁有住宅、學校、醫療院所或活動空間。  
+            - **B2 道路旁通行情境**：主要道路旁有步行、通學、騎車或穿越動線。  
+            - **B3 道路邊界防護情境**：道路與敏感受體之間有明確邊界防護需求。  
+
+            **C 類：短期事件或臨時污染背景**  
+            - **C1 事件影響停留空間**：如施工、整地、堆置等影響活動或停留空間。  
+            - **C2 事件影響通行路徑**：短期事件影響步行、通學、騎車或通行路線。  
+            - **C3 事件位於邊界或鄰近受體**：短期事件靠近住宅、學校、醫療院所或基地周界。  
+
+            C 類情境通常應以源頭管理、作業管理或臨時防制措施為優先，植生多作為補強。
             """
         )
 
