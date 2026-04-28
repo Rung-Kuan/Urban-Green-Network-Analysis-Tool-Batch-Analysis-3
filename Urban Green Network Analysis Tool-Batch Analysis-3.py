@@ -365,6 +365,21 @@ def load_factory_points() -> pd.DataFrame:
         df["TWD97X"] = df["TWD97X"].apply(clean_numeric)
         df["TWD97Y"] = df["TWD97Y"].apply(clean_numeric)
         df = df.dropna(subset=["TWD97X", "TWD97Y"])
+
+        name_col = find_factory_name_column(df)
+        if name_col is not None:
+            df["標準工廠名稱"] = df[name_col].fillna("").astype(str).str.strip()
+            df["標準工廠名稱"] = df["標準工廠名稱"].replace("", np.nan)
+        else:
+            df["標準工廠名稱"] = np.nan
+
+        # 若沒有名稱，至少用管制編號或 emsno 輔助顯示，不再全部顯示未命名。
+        for fallback_col in ["管制編號", "emsno", "facno", "uniformno"]:
+            if fallback_col in df.columns:
+                fallback = df[fallback_col].fillna("").astype(str).str.strip().replace("", np.nan)
+                df["標準工廠名稱"] = df["標準工廠名稱"].fillna(fallback)
+
+        df["標準工廠名稱"] = df["標準工廠名稱"].fillna("未命名工廠")
     return df
 
 
@@ -1086,6 +1101,43 @@ def object_name(row: pd.Series, candidates: List[str], default: str = "未命名
     return default
 
 
+def find_factory_name_column(df: pd.DataFrame) -> str | None:
+    """找出工廠名稱欄位。
+
+    有些資料在不同軟體轉檔後，欄位可能含有空白、BOM 或不同命名。
+    這裡先找標準欄位，再用關鍵字輔助判斷。
+    """
+    if df.empty:
+        return None
+
+    normalized = {str(c).strip().replace("\ufeff", ""): c for c in df.columns}
+
+    preferred = [
+        "工廠名稱",
+        "公私場所名稱",
+        "事業機構名稱",
+        "公司名稱",
+        "工廠廠名",
+        "機構名稱",
+        "事業名稱",
+        "名稱",
+    ]
+
+    for name in preferred:
+        if name in normalized:
+            return normalized[name]
+
+    for clean_name, original_name in normalized.items():
+        if ("工廠" in clean_name and "名稱" in clean_name) or ("場所" in clean_name and "名稱" in clean_name):
+            return original_name
+
+    for clean_name, original_name in normalized.items():
+        if "名稱" in clean_name or "name" in clean_name.lower():
+            return original_name
+
+    return None
+
+
 def prepare_point_layer_df(df: pd.DataFrame, county: str = "") -> pd.DataFrame:
     """將 TWD97 點位資料轉成 pydeck 可用的經緯度資料。"""
     if df.empty:
@@ -1112,18 +1164,21 @@ def nearby_factories(row: pd.Series, radius: float = 500) -> pd.DataFrame:
     if data.empty:
         return data
 
-    # 工廠地圖與明細顯示名稱：優先直接使用 factory_points.csv 的「工廠名稱」。
-    if "工廠名稱" in data.columns:
-        direct_name = data["工廠名稱"].fillna("").astype(str).str.strip()
-        direct_name = direct_name.replace("", np.nan)
+    if "標準工廠名稱" in data.columns:
+        data["名稱"] = data["標準工廠名稱"].fillna("").astype(str).str.strip().replace("", np.nan)
     else:
-        direct_name = pd.Series(np.nan, index=data.index)
+        name_col = find_factory_name_column(data)
+        if name_col is not None:
+            data["名稱"] = data[name_col].fillna("").astype(str).str.strip().replace("", np.nan)
+        else:
+            data["名稱"] = np.nan
 
     fallback_name = data.apply(
         lambda r: object_name(
             r,
             [
                 "工廠名稱",
+                "標準工廠名稱",
                 "公私場所名稱",
                 "事業機構名稱",
                 "公司名稱",
@@ -1131,14 +1186,14 @@ def nearby_factories(row: pd.Series, radius: float = 500) -> pd.DataFrame:
                 "機構名稱",
                 "事業名稱",
                 "管制編號",
+                "emsno",
                 "名稱",
             ],
             "未命名工廠",
         ),
         axis=1,
     )
-
-    data["名稱"] = direct_name.fillna(fallback_name).fillna("未命名工廠")
+    data["名稱"] = data["名稱"].fillna(fallback_name).fillna("未命名工廠")
     data["tooltip_name"] = data["名稱"]
     return data.sort_values("距離(公尺)")
 
@@ -1324,10 +1379,11 @@ def render_nearby_object_tables(row: pd.Series):
         if factories.empty:
             st.info("500 公尺內未偵測到工廠，或尚未提供 factory_points.csv。")
         else:
-            display_cols = [c for c in ["名稱", "工廠名稱", "emsno", "industryname", "facilityaddress", "距離(公尺)"] if c in factories.columns]
-            # 若名稱與工廠名稱重複，只保留名稱，避免欄位太雜。
-            if "名稱" in display_cols and "工廠名稱" in display_cols:
-                display_cols.remove("工廠名稱")
+            display_cols = [c for c in ["名稱", "標準工廠名稱", "工廠名稱", "emsno", "industryname", "facilityaddress", "距離(公尺)"] if c in factories.columns]
+            # 若名稱與標準工廠名稱或工廠名稱重複，只保留名稱，避免欄位太雜。
+            for dup_col in ["標準工廠名稱", "工廠名稱"]:
+                if "名稱" in display_cols and dup_col in display_cols:
+                    display_cols.remove(dup_col)
             st.dataframe(
                 factories[display_cols].round({"距離(公尺)": 1}),
                 hide_index=True,
@@ -1376,18 +1432,21 @@ def all_factories_with_distance(row: pd.Series) -> pd.DataFrame:
 
     data = factories.copy()
     data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
-    # 工廠地圖與明細顯示名稱：優先直接使用 factory_points.csv 的「工廠名稱」。
-    if "工廠名稱" in data.columns:
-        direct_name = data["工廠名稱"].fillna("").astype(str).str.strip()
-        direct_name = direct_name.replace("", np.nan)
+    if "標準工廠名稱" in data.columns:
+        data["名稱"] = data["標準工廠名稱"].fillna("").astype(str).str.strip().replace("", np.nan)
     else:
-        direct_name = pd.Series(np.nan, index=data.index)
+        name_col = find_factory_name_column(data)
+        if name_col is not None:
+            data["名稱"] = data[name_col].fillna("").astype(str).str.strip().replace("", np.nan)
+        else:
+            data["名稱"] = np.nan
 
     fallback_name = data.apply(
         lambda r: object_name(
             r,
             [
                 "工廠名稱",
+                "標準工廠名稱",
                 "公私場所名稱",
                 "事業機構名稱",
                 "公司名稱",
@@ -1395,14 +1454,14 @@ def all_factories_with_distance(row: pd.Series) -> pd.DataFrame:
                 "機構名稱",
                 "事業名稱",
                 "管制編號",
+                "emsno",
                 "名稱",
             ],
             "未命名工廠",
         ),
         axis=1,
     )
-
-    data["名稱"] = direct_name.fillna(fallback_name).fillna("未命名工廠")
+    data["名稱"] = data["名稱"].fillna(fallback_name).fillna("未命名工廠")
     data["tooltip_name"] = data["名稱"]
     return data.sort_values("距離(公尺)")
 
@@ -1487,7 +1546,9 @@ def render_single_context_map(row: pd.Series):
 
     if not factories_map.empty:
         # 不共用泛用「名稱」欄位，改用地圖專用 tooltip_name，避免被預設值覆蓋。
-        if "工廠名稱" in factories_map.columns:
+        if "標準工廠名稱" in factories_map.columns:
+            factories_map["tooltip_name"] = factories_map["標準工廠名稱"].fillna("").astype(str).str.strip()
+        elif "工廠名稱" in factories_map.columns:
             factories_map["tooltip_name"] = factories_map["工廠名稱"].fillna("").astype(str).str.strip()
         elif "名稱" in factories_map.columns:
             factories_map["tooltip_name"] = factories_map["名稱"].fillna("").astype(str).str.strip()
