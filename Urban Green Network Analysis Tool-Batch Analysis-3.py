@@ -1703,6 +1703,17 @@ def render_single_context_map(row: pd.Series):
     life_map = prepare_point_layer_df(life_all, county)
     green_map = prepare_point_layer_df(green_all, county)
 
+    st.markdown("#### 地圖圖層")
+    layer_col1, layer_col2, layer_col3, layer_col4 = st.columns(4)
+    with layer_col1:
+        show_factories = st.checkbox("工廠", value=True)
+    with layer_col2:
+        show_schools = st.checkbox("學校", value=True)
+    with layer_col3:
+        show_medical = st.checkbox("醫療院所", value=True)
+    with layer_col4:
+        show_green = st.checkbox("綠化單元", value=True)
+
     if not factories_map.empty:
         # 不共用泛用「名稱」欄位，改用地圖專用 tooltip_name，避免被預設值覆蓋。
         if "標準工廠名稱" in factories_map.columns:
@@ -1728,17 +1739,31 @@ def render_single_context_map(row: pd.Series):
             axis=1,
         )
 
-        def life_color(r):
+        def is_medical(r):
             source = str(r.get("資料來源", ""))
             node_type = str(r.get("節點類型", ""))
-            if "醫療" in source or "醫療" in node_type or "院所" in node_type or "醫院" in node_type or "診所" in node_type:
-                return [155, 89, 182, 170]  # 紫色：醫療院所
-            if "學校" in source or "學校" in node_type or "校" in node_type:
-                return [52, 152, 219, 170]  # 藍色：學校
-            return [41, 128, 185, 150]
+            return "醫療" in source or "醫療" in node_type or "院所" in node_type or "醫院" in node_type or "診所" in node_type
 
-        life_map["color"] = life_map.apply(life_color, axis=1)
+        def is_school(r):
+            source = str(r.get("資料來源", ""))
+            node_type = str(r.get("節點類型", ""))
+            return "學校" in source or "學校" in node_type or "校" in node_type
+
+        life_map["是否醫療院所"] = life_map.apply(is_medical, axis=1)
+        life_map["是否學校"] = life_map.apply(is_school, axis=1)
         life_map["radius"] = 60
+
+    school_map = pd.DataFrame()
+    medical_map = pd.DataFrame()
+
+    if not life_map.empty:
+        school_map = life_map[life_map["是否學校"] & ~life_map["是否醫療院所"]].copy()
+        medical_map = life_map[life_map["是否醫療院所"]].copy()
+
+        if not school_map.empty:
+            school_map["color"] = [[52, 152, 219, 170]] * len(school_map)
+        if not medical_map.empty:
+            medical_map["color"] = [[155, 89, 182, 170]] * len(medical_map)
 
     if not green_map.empty:
         green_map["tooltip_name"] = green_map["名稱"] if "名稱" in green_map.columns else "綠化單元"
@@ -1789,8 +1814,8 @@ def render_single_context_map(row: pd.Series):
         )
     )
 
-    # 完整資料圖層：綠化單元 → 生活節點／敏感受體 → 工廠 → 查詢基地
-    if not green_map.empty:
+    # 圖層順序：綠化單元 → 學校 → 醫療院所 → 工廠 → 查詢基地
+    if show_green and not green_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=green_map,
@@ -1801,10 +1826,10 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if not life_map.empty:
+    if show_schools and not school_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
-            data=life_map,
+            data=school_map,
             get_position="[經度, 緯度]",
             get_radius="radius",
             get_fill_color="color",
@@ -1812,7 +1837,18 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if not factories_map.empty:
+    if show_medical and not medical_map.empty:
+        layers.append(pdk.Layer(
+            "ScatterplotLayer",
+            data=medical_map,
+            get_position="[經度, 緯度]",
+            get_radius="radius",
+            get_fill_color="color",
+            pickable=True,
+            auto_highlight=True,
+        ))
+
+    if show_factories and not factories_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=factories_map,
@@ -1863,7 +1899,7 @@ def render_single_context_map(row: pd.Series):
 
     st.caption(
         "圖例：黑色＝查詢基地；藍色透明圈＝500 公尺範圍；橘色透明圈＝1000 公尺範圍；"
-        "紅色＝完整工廠資料；藍色＝學校；紫色＝醫療院所；綠色＝完整綠化單元資料。"
+        "紅色＝工廠；藍色＝學校；紫色＝醫療院所；綠色＝綠化單元。"
     )
 
     def count_within(df: pd.DataFrame, distance: float) -> int:
