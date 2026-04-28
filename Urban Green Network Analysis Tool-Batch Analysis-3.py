@@ -2138,6 +2138,35 @@ def render_download_section(result_df: pd.DataFrame):
     )
 
 
+def render_batch_single_site_context(filtered_df: pd.DataFrame):
+    st.subheader("四、單一基地周邊檢視")
+
+    if filtered_df.empty:
+        st.info("目前篩選結果沒有基地可供檢視。請調整上方篩選條件。")
+        return
+
+    view_df = filtered_df.reset_index(drop=True).copy()
+    view_df["基地選項"] = view_df.apply(
+        lambda r: f"{r.get('代碼', '')}｜{r.get('縣市', '')}｜{r.get('鄉鎮市區', '')}｜{r.get('基地名稱', '')}",
+        axis=1,
+    )
+
+    selected_label = st.selectbox(
+        "選擇要檢視周邊的基地",
+        options=view_df["基地選項"].tolist(),
+        key="batch_selected_site_for_context_map",
+    )
+
+    selected_row = view_df.loc[view_df["基地選項"] == selected_label].iloc[0]
+
+    st.caption(
+        "此處僅顯示目前「三、分析結果表」篩選後的基地。"
+        "選擇單一基地後，可檢視其 500 公尺、1000 公尺範圍及周邊工廠、學校、醫療院所與綠化單元。"
+    )
+
+    render_single_context_map(selected_row)
+
+
 def render_full_results(result_df: pd.DataFrame, mode: str):
     notes = []
     if "自動補值提醒" in result_df.columns:
@@ -2147,7 +2176,8 @@ def render_full_results(result_df: pd.DataFrame, mode: str):
 
     if mode == "batch":
         render_batch_summary(result_df)
-        render_result_table_and_filters(result_df)
+        filtered_df = render_result_table_and_filters(result_df)
+        render_batch_single_site_context(filtered_df)
         render_download_section(result_df)
         render_detail_sections(result_df)
     else:
