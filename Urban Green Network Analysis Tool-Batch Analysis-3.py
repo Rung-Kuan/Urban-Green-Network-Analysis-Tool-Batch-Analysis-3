@@ -1328,7 +1328,7 @@ def render_nearby_object_tables(row: pd.Series):
             st.dataframe(green[cols].round({"基地面積(公頃)": 3, "距離(公尺)": 1}), hide_index=True, use_container_width=True)
 
 
-def make_circle_polygon_twd97(x: float, y: float, radius_m: float = 500, n_points: int = 120, county: str = "") -> pd.DataFrame:
+def make_circle_polygon_twd97(x: float, y: float, radius_m: float = 500, n_points: int = 160, county: str = "") -> pd.DataFrame:
     """建立 TWD97 圓形範圍並轉為 WGS84 polygon 座標。"""
     angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
     coords = []
@@ -1339,6 +1339,68 @@ def make_circle_polygon_twd97(x: float, y: float, radius_m: float = 500, n_point
         coords.append([lon, lat])
     coords.append(coords[0])
     return pd.DataFrame([{"範圍": f"{int(radius_m)}公尺範圍", "coordinates": coords}])
+
+
+def all_factories_with_distance(row: pd.Series) -> pd.DataFrame:
+    factories = load_factory_points()
+    if factories.empty or pd.isna(row["TWD97X"]) or pd.isna(row["TWD97Y"]):
+        return pd.DataFrame()
+
+    data = factories.copy()
+    data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
+    data["名稱"] = data.apply(
+        lambda r: object_name(r, ["工廠名稱", "事業名稱", "管制編號", "名稱"], "工廠"),
+        axis=1,
+    )
+    return data.sort_values("距離(公尺)")
+
+
+def all_life_nodes_with_distance(row: pd.Series) -> pd.DataFrame:
+    nodes = load_life_nodes()
+    if nodes.empty or pd.isna(row["TWD97X"]) or pd.isna(row["TWD97Y"]):
+        return pd.DataFrame()
+
+    data = nodes.copy()
+    data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
+    data["名稱"] = data.apply(
+        lambda r: object_name(r, ["節點名稱", "學校名稱", "醫療院所名稱", "機構名稱", "名稱"], "生活節點"),
+        axis=1,
+    )
+    if "節點類型" not in data.columns:
+        data["節點類型"] = data.get("資料來源", "生活節點")
+    return data.sort_values("距離(公尺)")
+
+
+def all_green_units_with_distance(row: pd.Series) -> pd.DataFrame:
+    green = load_green_units()
+    if green.empty or pd.isna(row["TWD97X"]) or pd.isna(row["TWD97Y"]):
+        return pd.DataFrame()
+
+    data = green.copy()
+
+    site_code = str(row.get("代碼", "")).strip()
+    site_name = str(row.get("基地名稱", "")).strip()
+    if site_code:
+        data = data[data["綠化單元代碼"].astype(str).str.strip() != site_code]
+    if site_name:
+        data = data[data["綠化單元名稱"].astype(str).str.strip() != site_name]
+
+    if data.empty:
+        return data
+
+    data["距離(公尺)"] = euclidean_distances_m(float(row["TWD97X"]), float(row["TWD97Y"]), data)
+
+    # 距離 1 公尺以內視為同一基地，不列入完整綠化單元圖層與統計。
+    data = data[data["距離(公尺)"] > 1].copy()
+
+    if data.empty:
+        return data
+
+    data["名稱"] = data.apply(
+        lambda r: object_name(r, ["綠化單元名稱", "名稱"], "綠化單元"),
+        axis=1,
+    )
+    return data.sort_values("距離(公尺)")
 
 
 def render_single_context_map(row: pd.Series):
@@ -1358,63 +1420,84 @@ def render_single_context_map(row: pd.Series):
         "距離(公尺)": 0,
         "緯度": row["緯度"],
         "經度": row["經度"],
-        "color": [0, 0, 0, 240],
-        "radius": 170,
+        "color": [0, 0, 0, 245],
+        "radius": 180,
     }])
 
-    factories = prepare_point_layer_df(nearby_factories(row, 500), county)
-    life = prepare_point_layer_df(nearby_life_nodes(row, 500), county)
-    green_500 = prepare_point_layer_df(nearby_green_units(row, 500), county)
-    green_1000 = prepare_point_layer_df(nearby_green_units(row, 1000), county)
+    factories_all = all_factories_with_distance(row)
+    life_all = all_life_nodes_with_distance(row)
+    green_all = all_green_units_with_distance(row)
 
-    if not factories.empty:
-        factories["類型"] = "工廠"
-        factories["color"] = [[231, 76, 60, 220]] * len(factories)
-        factories["radius"] = 80
+    factories_map = prepare_point_layer_df(factories_all, county)
+    life_map = prepare_point_layer_df(life_all, county)
+    green_map = prepare_point_layer_df(green_all, county)
 
-    if not life.empty:
-        life["類型"] = life.apply(
+    if not factories_map.empty:
+        factories_map["類型"] = "工廠"
+        factories_map["color"] = [[231, 76, 60, 130]] * len(factories_map)
+        factories_map["radius"] = 60
+
+    if not life_map.empty:
+        life_map["類型"] = life_map.apply(
             lambda r: f"{r.get('資料來源', '生活節點')}／{r.get('節點類型', '生活節點')}",
             axis=1,
         )
-        life["color"] = [[52, 152, 219, 210]] * len(life)
-        life["radius"] = 80
+        life_map["color"] = [[52, 152, 219, 140]] * len(life_map)
+        life_map["radius"] = 60
 
-    if not green_1000.empty:
-        green_1000["類型"] = green_1000.apply(
+    if not green_map.empty:
+        green_map["類型"] = green_map.apply(
             lambda r: f"綠化單元／{r.get('資料類型', '')}",
             axis=1,
         )
-        green_1000["color"] = [[46, 204, 113, 190]] * len(green_1000)
-        green_1000["radius"] = 90
+        green_map["color"] = [[46, 204, 113, 130]] * len(green_map)
+        green_map["radius"] = 65
 
     layers = []
 
-    # 500 公尺範圍圈
-    circle_df = make_circle_polygon_twd97(
+    # 1000 公尺範圍圈：先畫，避免蓋住 500 公尺圈
+    circle_1000 = make_circle_polygon_twd97(
         float(row["TWD97X"]),
         float(row["TWD97Y"]),
-        radius_m=500,
+        radius_m=1000,
         county=county,
     )
-
     layers.append(
         pdk.Layer(
             "PolygonLayer",
-            data=circle_df,
+            data=circle_1000,
             get_polygon="coordinates",
-            get_fill_color=[0, 120, 255, 25],
-            get_line_color=[0, 120, 255, 180],
+            get_fill_color=[255, 170, 0, 18],
+            get_line_color=[255, 170, 0, 190],
             line_width_min_pixels=2,
             pickable=False,
         )
     )
 
-    # 先畫 1000m 綠化單元，再畫 500m 內其他對象，避免被遮住
-    if not green_1000.empty:
+    # 500 公尺範圍圈
+    circle_500 = make_circle_polygon_twd97(
+        float(row["TWD97X"]),
+        float(row["TWD97Y"]),
+        radius_m=500,
+        county=county,
+    )
+    layers.append(
+        pdk.Layer(
+            "PolygonLayer",
+            data=circle_500,
+            get_polygon="coordinates",
+            get_fill_color=[0, 120, 255, 30],
+            get_line_color=[0, 120, 255, 220],
+            line_width_min_pixels=2,
+            pickable=False,
+        )
+    )
+
+    # 完整資料圖層：綠化單元 → 生活節點／敏感受體 → 工廠 → 查詢基地
+    if not green_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
-            data=green_1000,
+            data=green_map,
             get_position="[經度, 緯度]",
             get_radius="radius",
             get_fill_color="color",
@@ -1422,10 +1505,10 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if not life.empty:
+    if not life_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
-            data=life,
+            data=life_map,
             get_position="[經度, 緯度]",
             get_radius="radius",
             get_fill_color="color",
@@ -1433,10 +1516,10 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
-    if not factories.empty:
+    if not factories_map.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
-            data=factories,
+            data=factories_map,
             get_position="[經度, 緯度]",
             get_radius="radius",
             get_fill_color="color",
@@ -1459,7 +1542,7 @@ def render_single_context_map(row: pd.Series):
     view_state = pdk.ViewState(
         longitude=float(row["經度"]),
         latitude=float(row["緯度"]),
-        zoom=13,
+        zoom=12,
         pitch=0,
     )
 
@@ -1483,15 +1566,40 @@ def render_single_context_map(row: pd.Series):
     )
 
     st.caption(
-        "圖例：黑色＝查詢基地；藍色透明圈＝基地 500 公尺範圍；"
-        "紅色＝500 公尺內工廠；藍色＝500 公尺內敏感受體／生活節點；"
-        "綠色＝1000 公尺內綠化單元。"
+        "圖例：黑色＝查詢基地；藍色透明圈＝500 公尺範圍；橘色透明圈＝1000 公尺範圍；"
+        "紅色＝完整工廠資料；藍色＝完整敏感受體／生活節點資料；綠色＝完整綠化單元資料。"
     )
 
-    st.caption(
-        f"目前地圖標示：工廠 {len(factories)} 處、敏感受體／生活節點 {len(life)} 處、"
-        f"綠化單元 {len(green_1000)} 處，其中 500 公尺內綠化單元 {len(green_500)} 處。"
+    def count_within(df: pd.DataFrame, distance: float) -> int:
+        if df.empty or "距離(公尺)" not in df.columns:
+            return 0
+        return int((df["距離(公尺)"] <= distance).sum())
+
+    summary = pd.DataFrame(
+        [
+            {
+                "資料類別": "工廠",
+                "500公尺內數量": count_within(factories_all, 500),
+                "1000公尺內數量": count_within(factories_all, 1000),
+                "完整資料筆數": len(factories_all),
+            },
+            {
+                "資料類別": "敏感受體／生活節點",
+                "500公尺內數量": count_within(life_all, 500),
+                "1000公尺內數量": count_within(life_all, 1000),
+                "完整資料筆數": len(life_all),
+            },
+            {
+                "資料類別": "綠化單元",
+                "500公尺內數量": count_within(green_all, 500),
+                "1000公尺內數量": count_within(green_all, 1000),
+                "完整資料筆數": len(green_all),
+            },
+        ]
     )
+
+    st.markdown("#### 地圖點位統計")
+    st.dataframe(summary, hide_index=True, use_container_width=True)
 
 
 # ============================================================
