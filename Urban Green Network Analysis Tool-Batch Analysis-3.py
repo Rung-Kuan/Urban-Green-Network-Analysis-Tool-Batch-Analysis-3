@@ -1188,7 +1188,7 @@ def build_single_score_table(row: pd.Series) -> pd.DataFrame:
         {
             "類別": "節點潛力",
             "評分項目": "鄉鎮人口暴露",
-            "評估值": f"人口密度={row['鄉鎮市區人口密度(人/平方公里)']} 人/km²",
+            "評估值": f"{row.get('縣市', '')}{row.get('鄉鎮市區', '')}；人口密度={row['鄉鎮市區人口密度(人/平方公里)']} 人/km²",
             "得分": row["節點_人口暴露分數"],
         },
         {
@@ -1328,6 +1328,19 @@ def render_nearby_object_tables(row: pd.Series):
             st.dataframe(green[cols].round({"基地面積(公頃)": 3, "距離(公尺)": 1}), hide_index=True, use_container_width=True)
 
 
+def make_circle_polygon_twd97(x: float, y: float, radius_m: float = 500, n_points: int = 120, county: str = "") -> pd.DataFrame:
+    """建立 TWD97 圓形範圍並轉為 WGS84 polygon 座標。"""
+    angles = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+    coords = []
+    for angle in angles:
+        px = x + radius_m * np.cos(angle)
+        py = y + radius_m * np.sin(angle)
+        lat, lon = twd97_to_wgs84(px, py, county)
+        coords.append([lon, lat])
+    coords.append(coords[0])
+    return pd.DataFrame([{"範圍": f"{int(radius_m)}公尺範圍", "coordinates": coords}])
+
+
 def render_single_context_map(row: pd.Series):
     if pdk is None:
         st.warning("尚未安裝 pydeck，無法顯示互動地圖。")
@@ -1338,37 +1351,70 @@ def render_single_context_map(row: pd.Series):
         return
 
     county = row.get("縣市", "")
+
     base_df = pd.DataFrame([{
         "名稱": row.get("基地名稱", "輸入基地"),
-        "類型": "輸入基地",
+        "類型": "查詢基地",
+        "距離(公尺)": 0,
         "緯度": row["緯度"],
         "經度": row["經度"],
-        "color": [0, 0, 0, 230],
-        "radius": 160,
+        "color": [0, 0, 0, 240],
+        "radius": 170,
     }])
 
     factories = prepare_point_layer_df(nearby_factories(row, 500), county)
     life = prepare_point_layer_df(nearby_life_nodes(row, 500), county)
-    green = prepare_point_layer_df(nearby_green_units(row, 1000), county)
+    green_500 = prepare_point_layer_df(nearby_green_units(row, 500), county)
+    green_1000 = prepare_point_layer_df(nearby_green_units(row, 1000), county)
 
-    layers = [
-        pdk.Layer(
-            "ScatterplotLayer",
-            data=base_df,
-            get_position="[經度, 緯度]",
-            get_radius="radius",
-            get_fill_color="color",
-            pickable=True,
-            auto_highlight=True,
+    if not factories.empty:
+        factories["類型"] = "工廠"
+        factories["color"] = [[231, 76, 60, 220]] * len(factories)
+        factories["radius"] = 80
+
+    if not life.empty:
+        life["類型"] = life.apply(
+            lambda r: f"{r.get('資料來源', '生活節點')}／{r.get('節點類型', '生活節點')}",
+            axis=1,
         )
-    ]
+        life["color"] = [[52, 152, 219, 210]] * len(life)
+        life["radius"] = 80
 
-    if not green.empty:
-        green["color"] = [[46, 204, 113, 170]] * len(green)
-        green["radius"] = 90
+    if not green_1000.empty:
+        green_1000["類型"] = green_1000.apply(
+            lambda r: f"綠化單元／{r.get('資料類型', '')}",
+            axis=1,
+        )
+        green_1000["color"] = [[46, 204, 113, 190]] * len(green_1000)
+        green_1000["radius"] = 90
+
+    layers = []
+
+    # 500 公尺範圍圈
+    circle_df = make_circle_polygon_twd97(
+        float(row["TWD97X"]),
+        float(row["TWD97Y"]),
+        radius_m=500,
+        county=county,
+    )
+
+    layers.append(
+        pdk.Layer(
+            "PolygonLayer",
+            data=circle_df,
+            get_polygon="coordinates",
+            get_fill_color=[0, 120, 255, 25],
+            get_line_color=[0, 120, 255, 180],
+            line_width_min_pixels=2,
+            pickable=False,
+        )
+    )
+
+    # 先畫 1000m 綠化單元，再畫 500m 內其他對象，避免被遮住
+    if not green_1000.empty:
         layers.append(pdk.Layer(
             "ScatterplotLayer",
-            data=green,
+            data=green_1000,
             get_position="[經度, 緯度]",
             get_radius="radius",
             get_fill_color="color",
@@ -1377,8 +1423,6 @@ def render_single_context_map(row: pd.Series):
         ))
 
     if not life.empty:
-        life["color"] = [[52, 152, 219, 190]] * len(life)
-        life["radius"] = 80
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=life,
@@ -1390,8 +1434,6 @@ def render_single_context_map(row: pd.Series):
         ))
 
     if not factories.empty:
-        factories["color"] = [[231, 76, 60, 200]] * len(factories)
-        factories["radius"] = 80
         layers.append(pdk.Layer(
             "ScatterplotLayer",
             data=factories,
@@ -1402,6 +1444,18 @@ def render_single_context_map(row: pd.Series):
             auto_highlight=True,
         ))
 
+    layers.append(
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=base_df,
+            get_position="[經度, 緯度]",
+            get_radius="radius",
+            get_fill_color="color",
+            pickable=True,
+            auto_highlight=True,
+        )
+    )
+
     view_state = pdk.ViewState(
         longitude=float(row["經度"]),
         latitude=float(row["緯度"]),
@@ -1410,7 +1464,11 @@ def render_single_context_map(row: pd.Series):
     )
 
     tooltip = {
-        "html": "<b>{名稱}</b><br/>類型：{類型}<br/>距離：{距離(公尺)} 公尺",
+        "html": """
+        <b>{名稱}</b><br/>
+        類型：{類型}<br/>
+        距離：{距離(公尺)} 公尺
+        """,
         "style": {"backgroundColor": "white", "color": "black"},
     }
 
@@ -1424,7 +1482,16 @@ def render_single_context_map(row: pd.Series):
         use_container_width=True,
     )
 
-    st.caption("圖例：黑色＝輸入基地；紅色＝工廠；藍色＝敏感受體／生活節點；綠色＝綠化單元。")
+    st.caption(
+        "圖例：黑色＝查詢基地；藍色透明圈＝基地 500 公尺範圍；"
+        "紅色＝500 公尺內工廠；藍色＝500 公尺內敏感受體／生活節點；"
+        "綠色＝1000 公尺內綠化單元。"
+    )
+
+    st.caption(
+        f"目前地圖標示：工廠 {len(factories)} 處、敏感受體／生活節點 {len(life)} 處、"
+        f"綠化單元 {len(green_1000)} 處，其中 500 公尺內綠化單元 {len(green_500)} 處。"
+    )
 
 
 # ============================================================
@@ -1680,7 +1747,7 @@ def build_single_site_dataframe() -> pd.DataFrame | None:
             town = st.text_input("鄉鎮市區", value="", key="single_town_manual")
 
     with location_col2:
-        st.caption("縣市與鄉鎮市區會依 `town_lookup.csv` 連動；若清單不完整，請確認對照表內容是否包含該縣市與行政區。")
+        st.empty()
 
     with st.form("single_site_form"):
         c1, c2 = st.columns(2)
