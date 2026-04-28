@@ -86,6 +86,7 @@ LOOKUP_FILES = {
     "綠牆": "green_walls.csv",
     "各級學校": "schools.csv",
     "醫療院所": "medical_facilities.csv",
+    "公園綠地": "parks/*.csv",
 }
 
 NODE_COLORS: Dict[str, List[int]] = {
@@ -515,9 +516,80 @@ def load_life_nodes() -> pd.DataFrame:
 
 
 @st.cache_data
+def load_park_units() -> pd.DataFrame:
+    """讀取 parks/ 資料夾內所有公園 CSV，並轉成綠化單元格式。"""
+    parks_dir = Path("parks")
+    empty_cols = ["綠化單元代碼", "綠化單元名稱", "TWD97X", "TWD97Y", "基地面積(公頃)", "資料類型"]
+
+    if not parks_dir.exists() or not parks_dir.is_dir():
+        return pd.DataFrame(columns=empty_cols)
+
+    park_files = sorted(parks_dir.glob("*.csv"))
+    if not park_files:
+        return pd.DataFrame(columns=empty_cols)
+
+    frames = []
+
+    for park_file in park_files:
+        raw = read_optional_csv(str(park_file), ["TWD97X", "TWD97Y"])
+        if raw.empty:
+            continue
+
+        df = raw.copy()
+
+        def first_existing(cols):
+            for col in cols:
+                if col in df.columns:
+                    return col
+            return None
+
+        code_col = first_existing(["公園代碼", "綠化單元代碼", "代碼", "編號", "ID", "id"])
+        name_col = first_existing(["公園名稱", "綠化單元名稱", "名稱", "name", "Name"])
+
+        area_ha_col = first_existing(["公園面積(公頃)", "基地面積(公頃)", "面積(公頃)", "面積公頃"])
+        area_m2_col = first_existing(["公園面積(平方公尺)", "面積(平方公尺)", "面積平方公尺", "area_m2"])
+
+        out = pd.DataFrame()
+        out["綠化單元代碼"] = df[code_col] if code_col else park_file.stem
+        out["綠化單元名稱"] = df[name_col] if name_col else park_file.stem
+        out["TWD97X"] = df["TWD97X"]
+        out["TWD97Y"] = df["TWD97Y"]
+
+        if area_ha_col:
+            out["基地面積(公頃)"] = df[area_ha_col].apply(clean_numeric)
+        elif area_m2_col:
+            out["基地面積(公頃)"] = df[area_m2_col].apply(clean_numeric) / 10000
+        else:
+            out["基地面積(公頃)"] = np.nan
+
+        out["資料類型"] = "公園"
+        out["來源檔案"] = park_file.name
+
+        frames.append(out)
+
+    if not frames:
+        return pd.DataFrame(columns=empty_cols)
+
+    parks = pd.concat(frames, ignore_index=True)
+    parks["TWD97X"] = parks["TWD97X"].apply(clean_numeric)
+    parks["TWD97Y"] = parks["TWD97Y"].apply(clean_numeric)
+    parks["基地面積(公頃)"] = parks["基地面積(公頃)"].apply(clean_numeric)
+    parks = parks.dropna(subset=["TWD97X", "TWD97Y"])
+
+    return parks
+
+
+@st.cache_data
 def load_green_units() -> pd.DataFrame:
-    air = read_optional_csv("green_air_sites.csv", ["綠化單元代碼", "綠化單元名稱", "TWD97X", "TWD97Y", "基地面積(公頃)"])
-    walls = read_optional_csv("green_walls.csv", ["綠化單元代碼", "綠化單元名稱", "TWD97X", "TWD97Y", "綠牆面積(平方公尺)"])
+    air = read_optional_csv(
+        "green_air_sites.csv",
+        ["綠化單元代碼", "綠化單元名稱", "TWD97X", "TWD97Y", "基地面積(公頃)"],
+    )
+    walls = read_optional_csv(
+        "green_walls.csv",
+        ["綠化單元代碼", "綠化單元名稱", "TWD97X", "TWD97Y", "綠牆面積(平方公尺)"],
+    )
+    parks = load_park_units()
 
     if not air.empty:
         air["資料類型"] = "空品淨化區"
@@ -529,17 +601,20 @@ def load_green_units() -> pd.DataFrame:
         walls["基地面積(公頃)"] = walls["綠牆面積(平方公尺)"] / 10000
 
     cols = ["綠化單元代碼", "綠化單元名稱", "TWD97X", "TWD97Y", "基地面積(公頃)", "資料類型"]
-    for df in [air, walls]:
+
+    for df in [air, walls, parks]:
         for col in cols:
             if col not in df.columns:
                 df[col] = np.nan
 
-    green = pd.concat([air[cols], walls[cols]], ignore_index=True)
+    green = pd.concat([air[cols], walls[cols], parks[cols]], ignore_index=True)
+
     if not green.empty:
         green["TWD97X"] = green["TWD97X"].apply(clean_numeric)
         green["TWD97Y"] = green["TWD97Y"].apply(clean_numeric)
         green["基地面積(公頃)"] = green["基地面積(公頃)"].apply(clean_numeric)
         green = green.dropna(subset=["TWD97X", "TWD97Y"])
+
     return green
 
 
@@ -637,7 +712,7 @@ def auto_enrich_context_fields(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str
     if life_nodes.empty:
         notes.append("未偵測到 schools.csv 或 medical_facilities.csv，敏感受體與生活節點數無法自動計算")
     if green_units.empty:
-        notes.append("未偵測到 green_air_sites.csv 或 green_walls.csv，串聯潛力相關綠化單元指標無法自動計算")
+        notes.append("未偵測到 green_air_sites.csv、green_walls.csv 或 parks/ 公園資料，串聯潛力相關綠化單元指標無法自動計算")
 
     density_values = data.apply(
         lambda r: lookup_population_density(r.get("縣市", ""), r.get("鄉鎮市區", ""), town_lookup),
@@ -1070,6 +1145,7 @@ def make_excel_download(df: pd.DataFrame):
                     "綠牆",
                     "各級學校",
                     "醫療院所",
+                    "公園綠地",
                 ],
                 "資料來源": [
                     "內政部－114年人口密度資料（1150427下載）",
@@ -1078,6 +1154,7 @@ def make_excel_download(df: pd.DataFrame):
                     "環境部－113年第四季季報（面積由平方公尺換算為公頃）",
                     "教育部－111學年度各級學校名錄",
                     "內政部－113年12月醫療院所分布圖（僅保留醫院）",
+                    "各縣市公園資料（parks/ 資料夾，系統自動合併）",
                 ],
             }
         ).to_excel(writer, index=False, sheet_name="資料來源說明")
@@ -2429,7 +2506,7 @@ with st.sidebar:
         st.markdown(
             """
             綠化單元指可提供綠覆、滯塵、緩衝、降溫、景觀或綠網串聯功能的空間。  
-            目前系統整合空品淨化區與綠牆資料；綠牆面積會由平方公尺換算為公頃。
+            目前系統整合空品淨化區、綠牆與公園資料；綠牆與公園若提供平方公尺面積，會換算為公頃。
             """
         )
     with st.expander("短期事件"):
@@ -2448,8 +2525,8 @@ with st.sidebar:
             - **建議優先強化基地功能**：節點條件佳，但串聯條件尚未達高潛力。  
             - **建議作為綠網連接補點**：串聯條件佳，可支撐綠網連接。  
             - **建議納入第二階段評估**：節點與串聯條件中等。  
-            - **建議作為局部連接或補強場址**：串聯條件尚可，但節點條件不足。  
-            - **建議視管理可行性再評估**：節點條件尚可，但串聯條件不足。  
+            - **建議作為局部連接或補強場址**：串聯條件尚可，但節點條件較基礎。  
+            - **建議視管理可行性再評估**：節點條件尚可，但串聯條件較基礎。  
             - **建議暫列低優先序**：節點與串聯條件皆低。  
             """
         )
